@@ -93,6 +93,23 @@ Optional argument ARGS as per `browse-url-default-browser'"
    :monitor-directory "~/Downloads"
    :silent-success t))
 
+(defun dwim-shell-commands-image-clear-exif-metadata ()
+  "Clear EXIF metadata in image(s)."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "View EXIF"
+   "cp '<<f>>' '<<fne>>_cleared.<<e>>'
+    exiftool -all:all= -overwrite_original '<<fne>>_cleared.<<e>>'"
+   :utils "exiftool"))
+
+(defun dwim-shell-commands-image-scan-code ()
+  "Scan any code from image(s)."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Scan code"
+   "zbarimg --quiet '<<f>>'"
+   :utils "zbarimg"))
+
 (defun dwim-shell-commands-image-exif-metadata ()
   "View EXIF metadata in image(s)."
   (interactive)
@@ -100,6 +117,14 @@ Optional argument ARGS as per `browse-url-default-browser'"
    "View EXIF"
    "exiftool '<<f>>'"
    :utils "exiftool"))
+
+(defun dwim-shell-commands-ocr-text-from-image ()
+  "Extract text from image via tesseract."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Extract text from image via tesseract."
+   "tesseract '<<f>>' -"
+   :utils "tesseract"))
 
 (defun dwim-shell-commands-image-browse-location ()
   "Open image(s) location in browser."
@@ -210,12 +235,38 @@ Optional argument ARGS as per `browse-url-default-browser'"
   (interactive)
   (dwim-shell-command-on-marked-files
    "Join as pdf"
-   (format "convert -verbose '<<*>>' '%s'"
+   (format "convert -verbose '<<*>>' '<<%s(u)>>'"
            (dwim-shell-command-read-file-name
             "Join as pdf named (default \"joined.pdf\"): "
             :extension "pdf"
-            :default "<<joined.pdf(u)>>"))
+            :default "joined.pdf"))
    :utils "convert"))
+
+(defun dwim-shell-commands-join-images-horizontally ()
+  "Join all marked images horizontally as a single image."
+  (interactive)
+  (let ((filename (format "joined.%s"
+                          (or (seq-first (dwim-shell-command--file-extensions)) "png"))))
+    (dwim-shell-command-on-marked-files
+     "Join images horizontally"
+     (format "convert -verbose '<<*>>' +append '<<%s(u)>>'"
+             (dwim-shell-command-read-file-name
+              (format "Join as image named (default \"%s\"): " filename)
+              :default filename))
+     :utils "convert")))
+
+(defun dwim-shell-commands-join-images-vertically ()
+  "Join all marked images vertically as a single image."
+  (interactive)
+  (let ((filename (format "joined.%s"
+                          (or (seq-first (dwim-shell-command--file-extensions)) "png"))))
+    (dwim-shell-command-on-marked-files
+     "Join images vertically"
+     (format "convert -verbose '<<*>>' -append '<<%s(u)>>'"
+             (dwim-shell-command-read-file-name
+              (format "Join as image named (default \"%s\"): " filename)
+              :default filename))
+     :utils "convert")))
 
 (defun dwim-shell-commands-image-to-grayscale ()
   "Convert all marked images to grayscale."
@@ -232,6 +283,14 @@ Optional argument ARGS as per `browse-url-default-browser'"
    "Reorient image"
    "convert -verbose -auto-orient '<<f>>' '<<fne>>_reoriented.<<e>>'"
    :utils "convert"))
+
+(defun dwim-shell-commands-gif-to-video ()
+  "Convert all marked gif(s) to video(s)."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Convert to gif"
+   "ffmpeg -i '<<f>>' -movflags faststart -pix_fmt yuv420p -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' '<<fne>>.mp4'"
+   :utils "ffmpeg"))
 
 (defun dwim-shell-commands-video-to-gif ()
   "Convert all marked videos to gif(s)."
@@ -286,7 +345,7 @@ Optional argument ARGS as per `browse-url-default-browser'"
   (interactive)
   (dwim-shell-command-on-marked-files
    "Convert to optimized gif"
-   "gifsicle -O3 '<<f>>' --lossy=80 -o '<<fne>>_optimized.gif'"
+   "gifsicle -O3 '<<f>>' --lossy=90 -o '<<fne>>_optimized.gif'"
    :utils '("ffmpeg" "gifsicle")))
 
 (defun dwim-shell-commands-speed-up-gif ()
@@ -559,6 +618,36 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
                       (kill-buffer buffer)
                       (switch-to-buffer (find-file-noselect temp-file t))))))
 
+(defun dwim-shell-commands-sha-256-hash-file-at-clipboard-url ()
+  "Download file at clipboard URL and generate SHA-256 hash."
+  (interactive)
+  (let ((url (current-kill 0)))
+    (unless (string-match-p "^http[s]?://" url)
+      (user-error "No URL in clipboard"))
+    (dwim-shell-command-on-marked-files
+     "Generate SHA-256 hash from clipboard URL."
+     (format
+      "temp_file=$(mktemp)
+       function cleanup {
+         rm -f $temp_file
+       }
+       trap cleanup EXIT
+       curl --no-progress-meter --location --fail --output $temp_file %s || exit 1
+       shasum -a 256 $temp_file | awk '{print $1}'"
+      (shell-quote-argument url))
+     :utils '("curl" "shasum")
+     :on-completion
+     (lambda (buffer process)
+       (if-let ((success (= (process-exit-status process) 0))
+                (hash (with-current-buffer buffer
+                        (string-trim (buffer-string)))))
+           (progn
+             (kill-buffer buffer)
+             (kill-new hash)
+             (message "Copied %s to clipboard"
+                      (propertize hash 'face 'font-lock-string-face)))
+         (switch-to-buffer buffer))))))
+
 (defun dwim-shell-commands-open-externally ()
   "Open file(s) externally."
   (interactive)
@@ -598,13 +687,13 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
                       (kill-buffer buffer)
                       (dired-jump nil (file-name-concat target-dir (file-name-nondirectory (nth 0 files))))))))
 
-(defun dwim-shell-commands-macos-hardware-overview ()
-  "View macOS hardware overview."
+(defun dwim-shell-commands-macos-version-and-hardware-overview-info ()
+  "View macOS version and hardware overview info."
   (interactive)
   (dwim-shell-command-on-marked-files
    "macOS hardware overview"
-   "system_profiler SPHardwareDataType"
-   :utils "system_profiler"))
+   "sw_vers; system_profiler SPHardwareDataType"
+   :utils '("sw_vers" "system_profiler")))
 
 (defun dwim-shell-commands-macos-reveal-in-finder ()
   "Reveal selected files in macOS Finder."
@@ -689,7 +778,7 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
      :utils "swift")))
 
 (defun dwim-shell-commands-macos-toggle-display-rotation ()
-  "View macOS hardware overview."
+  "Rotate display."
   (interactive)
   ;; #  Display_ID    Resolution  ____Display_Bounds____  Rotation
   ;; 2  0x2b347692    1440x2560      0     0  1440  2560    270    [main]
@@ -767,7 +856,7 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
   "Select and start recording a macOS window."
   (interactive)
   (let* ((window (dwim-shell-commands--macos-select-window))
-         (path (dwim-shell-commands--generate-path "~/Desktop" (car window) ".mov"))
+         (path (dwim-shell-commands--generate-path "~/Desktop" (car window) ".gif"))
          (buffer-file-name path) ;; override so <<f>> picks it up
          (inhibit-message t))
     ;; Silence echo to avoid unrelated messages making into animation.
@@ -776,16 +865,7 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
       (dwim-shell-command-on-marked-files
        "Start recording a macOS window."
        (format
-        "# record .mov
-         macosrec --record '%s' --mov --output '<<f>>'
-         # speed .mov up x1.5
-         ffmpeg -i '<<f>>' -an -filter:v 'setpts=1.5*PTS' '<<fne>>_x1.5.<<e>>'
-         # convert to gif x1.5
-         ffmpeg -loglevel quiet -stats -y -i '<<fne>>_x1.5.<<e>>' -pix_fmt rgb24 -r 15 '<<fne>>_x1.5.gif'
-         # speed .mov up x2
-         ffmpeg -i '<<f>>' -an -filter:v 'setpts=2*PTS' '<<fne>>_x2.<<e>>'
-         # convert to gif x2
-         ffmpeg -loglevel quiet -stats -y -i '<<fne>>_x2.<<e>>' -pix_fmt rgb24 -r 15 '<<fne>>_x2.gif'"
+        "macosrec --record '%s' --gif --output '<<f>>'"
         (cdr window))
        :silent-success t
        :monitor-directory "~/Desktop"
@@ -906,7 +986,8 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
 (defun dwim-shell-commands-git-clone-clipboard-url-to-downloads ()
   "Clone git URL in clipboard to \"~/Downloads/\"."
   (interactive)
-  (cl-assert (string-match-p "^\\(http\\|https\\|ssh\\)://" (current-kill 0)) nil "No URL in clipboard")
+  (cl-assert (or (string-match-p "^\\(http\\|https\\|ssh\\)://" (current-kill 0))
+                 (string-match-p "^git@" (current-kill 0))) nil "No URL in clipboard")
   (let* ((url (current-kill 0))
          (download-dir (expand-file-name "~/Downloads/"))
          (project-dir (concat download-dir (file-name-base url)))
@@ -997,7 +1078,7 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
     (kill-new ip)
     (message "Copied %s" ip)))
 
-(defun dwim-shell-commands-install-iphone-device-ipa ()
+(defun dwim-shell-commands-macos-install-iphone-device-ipa ()
   "Install iPhone device .ipa.
 Needs ideviceinstaller and libmobiledevice installed."
   (interactive)
@@ -1014,6 +1095,14 @@ Needs ideviceinstaller and libmobiledevice installed."
      (copy-file file "~/Downloads/" 1)
      (file-name-concat "~/Downloads" (file-name-nondirectory file)))
    :monitor-directory "~/Downloads"))
+
+(defun dwim-shell-commands-duplicate ()
+  "Duplicate file."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Duplicate file(s)."
+   "cp -R '<<f>>' '<<f(u)>>'"
+   :utils "cp"))
 
 (defun dwim-shell-commands-rename-all ()
   "Rename all marked file(s)."

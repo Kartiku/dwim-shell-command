@@ -5,7 +5,7 @@
 ;; Author: Alvaro Ramirez
 ;; Package-Requires: ((emacs "28.1"))
 ;; URL: https://github.com/xenodium/dwim-shell-command
-;; Version: 0.44
+;; Version: 0.51
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -44,7 +44,7 @@
 (require 'view)
 
 (defcustom dwim-shell-command-prompt
-  "DWIM shell command (<<f>> <<fne>> <<e>> <<td>> <<*>> <<cb>> <<n>>): "
+  "DWIM shell command (<<f>> <<fne>> <<e>>): "
   "`dwim-shell-command' prompt.  Modify if shorter is preferred."
   :type 'string
   :group 'dwim-shell-command)
@@ -77,6 +77,11 @@ Set to nil to use `shell-file-name'."
   "Shell util, for example: '(\"-x\" \"-c\").
 Set to nil to use `shell-command-switch'."
   :type '(repeat string)
+  :group 'dwim-shell-command)
+
+(defcustom dwim-shell-command-shell-trace nil
+  "Attempt to add --xtrace to shell command to debug."
+  :type 'boolean
   :group 'dwim-shell-command)
 
 (defcustom dwim-shell-command-done-buffer-name
@@ -202,7 +207,7 @@ Prefix
                     #'minibuffer-default-add-shell-commands))
     (read-from-minibuffer dwim-shell-command-prompt dwim-shell-command-default-command nil nil 'shell-command-history)))
 
-(cl-defun dwim-shell-command-on-marked-files (buffer-name script &key utils extensions shell-util shell-args shell-pipe post-process-template on-completion repeat silent-success no-progress error-autofocus monitor-directory focus-now join-separator)
+(cl-defun dwim-shell-command-on-marked-files (buffer-name script &key utils extensions shell-util shell-args shell-trace shell-pipe post-process-template on-completion repeat silent-success no-progress error-autofocus monitor-directory focus-now join-separator)
   "Create DWIM utilities executing templated SCRIPT on given files.
 
 Here's a simple utility invoking SCRIPT to convert image files to jpg.
@@ -293,6 +298,7 @@ Quick exit
                                      :extensions extensions
                                      :shell-util shell-util
                                      :shell-args shell-args
+                                     :shell-trace shell-trace
                                      :shell-pipe shell-pipe
                                      :post-process-template post-process-template
                                      :on-completion on-completion
@@ -304,7 +310,7 @@ Quick exit
                                      :focus-now focus-now
                                      :join-separator join-separator))
 
-(cl-defun dwim-shell-command-execute-script (buffer-name script &key files extensions shell-util shell-args shell-pipe utils post-process-template on-completion silent-success gen-temp-dir repeat no-progress error-autofocus monitor-directory focus-now join-separator)
+(cl-defun dwim-shell-command-execute-script (buffer-name script &key files extensions shell-util shell-args shell-trace shell-pipe utils post-process-template on-completion silent-success gen-temp-dir repeat no-progress error-autofocus monitor-directory focus-now join-separator)
   "Execute a script asynchronously, DWIM style with SCRIPT and BUFFER-NAME.
 
 :FILES are used to instantiate SCRIPT as a noweb template.
@@ -397,6 +403,7 @@ This is implied when <<td>> appears in the script.
     (setq shell-args (list shell-args)))
   ;; See if -x can be prepended.
   (when (and (not (seq-contains-p shell-args "-x"))
+             (or shell-trace dwim-shell-command-shell-trace)
              (apply #'dwim-shell-command--program-test
                     (seq-concatenate
                      'list shell-util '("-x") shell-args (list "echo"))))
@@ -757,7 +764,18 @@ REPLACEMENTS is a cons list of literals to replace with values."
         (setq template (replace-regexp-in-string "\\([^ ]\\)\\(\<\<f\>\>\\)\\([^ ]\\)"
                                                  (string-replace unescaped-quote escaped-quote file)
                                                  template nil nil 2))
-      (setq template (replace-regexp-in-string "\\(\<\<f\>\>\\)" file template nil nil 1))))
+      (setq template (replace-regexp-in-string "\\(\<\<f\>\>\\)" file template nil nil 1)))
+
+    ;; "<<f(u)>>" with "/path/file.jpg" -> "/path/file(1).jpg"
+    (if-let* ((quoting (dwim-shell-command--escaped-quote-around "\<\<f(u)\>\>" template))
+              (unescaped-quote (nth 0 quoting))
+              (escaped-quote (nth 1 quoting)))
+        (setq template (replace-regexp-in-string "\\([^ ]\\)\\(\<\<f\(u)>\>\\)\\([^ ]\\)"
+                                                 (string-replace unescaped-quote escaped-quote
+                                                                 (dwim-shell-command--unique-new-file-path file))
+                                                 template nil nil 2))
+      (setq template (replace-regexp-in-string "\\(\<\<f(u)\>\>\\)"
+                                               (dwim-shell-command--unique-new-file-path file) template nil nil 1))))
 
   ;; "<<some.txt(u)>>" -> some.txt (if unique)
   ;;                   -> some(1).txt (if it exist)
@@ -924,6 +942,15 @@ all needed to finalize processing."
               (reporter (dwim-shell-command--command-reporter exec)))
     (progress-reporter-update reporter))
   (comint-output-filter process output))
+
+(defun dwim-shell-command--file-extensions ()
+  "Return buffer file extension or marked/region extensions for a `dired' buffer."
+  (seq-uniq
+   (seq-map
+    #'file-name-extension
+    (seq-filter
+     #'file-name-extension
+     (dwim-shell-command--files)))))
 
 (defun dwim-shell-command--files ()
   "Return buffer file (if available) or marked/region files for a `dired' buffer."
