@@ -103,7 +103,7 @@ Optional argument ARGS as per `browse-url-default-browser'"
    :utils "exiftool"))
 
 (defun dwim-shell-commands-image-scan-code ()
-  "Scan any code from image(s)."
+  "Scan any code (ie. qr, bar, etc) from image(s)."
   (interactive)
   (dwim-shell-command-on-marked-files
    "Scan code"
@@ -126,8 +126,8 @@ Optional argument ARGS as per `browse-url-default-browser'"
    "tesseract '<<f>>' -"
    :utils "tesseract"))
 
-(defun dwim-shell-commands-image-browse-location ()
-  "Open image(s) location in browser."
+(defun dwim-shell-commands-image-view-location-in-openstreetmap ()
+  "Open image(s) location in map/browser."
   (interactive)
   (dwim-shell-command-on-marked-files
    "Browse location"
@@ -292,6 +292,18 @@ Optional argument ARGS as per `browse-url-default-browser'"
    "ffmpeg -i '<<f>>' -movflags faststart -pix_fmt yuv420p -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' '<<fne>>.mp4'"
    :utils "ffmpeg"))
 
+(defun dwim-shell-commands-macos-convert-to-mp4 ()
+  "Convert to mov to mp4"
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Convert to mov to mp4"
+   ;; "ffmpeg -loglevel quiet -stats -y -i <<f>>.mov -vcodec h264 -acodec copy <<fne>>.mp4"
+   ;; Found the encoder via ffmpeg -encoders | grep videotoolbox,
+   ;; source https://www.reddit.com/r/ffmpeg/comments/14pqeex/getting_0_gpu_utilization_with_apple_silicons/
+   "ffmpeg -i '<<f>>' -map_metadata 0 \
+     -c:v hevc_videotoolbox -q:v 35 -preset fast -c:a aac -b:a 128k -tag:v hvc1 '<<fne>>'.mp4"
+   :utils "ffmpeg"))
+
 (defun dwim-shell-commands-video-to-gif ()
   "Convert all marked videos to gif(s)."
   (interactive)
@@ -339,6 +351,23 @@ Optional argument ARGS as per `browse-url-default-browser'"
   (dwim-shell-command-on-marked-files
    "Unzip" "atool --extract --explain '<<f>>'"
    :utils "atool"))
+
+(defun dwim-shell-commands-zip ()
+  "Zip all marked files into archive.zip."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Zip" (if (eq 1 (seq-length (dwim-shell-command--files)))
+             "zip -r '<<fne>>.<<e>>' '<<f>>'"
+           "zip -r '<<archive.zip(u)>>' '<<*>>'")
+   :utils "zip"))
+
+(defun dwim-shell-commands-zip-password-protect ()
+  "Protect/encrypt zip file(s) with password."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Add zip password" "zipcloak --output-file '<<fne>>_protected.<<e>>' '<<f>>'"
+   :extensions "zip"
+   :utils "zipcloak"))
 
 (defun dwim-shell-commands-optimize-gif ()
   "Convert all marked videos to optimized gif(s)."
@@ -448,6 +477,25 @@ Optional argument ARGS as per `browse-url-default-browser'"
        :error-autofocus t
        :silent-success t))))
 
+(defun dwim-shell-commands-macos-add-to-photos ()
+  "Add to Photos.app."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Add to Photos.app"
+   "osascript <<EOF
+  tell application \"Photos\"
+    import POSIX file \"<<f>>\"
+  end tell
+EOF"
+   :silent-success t
+   :utils "osascript"
+   :on-completion (lambda (buffer process)
+                    (if-let ((success (= (process-exit-status process) 0)))
+                        (progn
+                          (kill-buffer buffer)
+                          (start-process "Open Photos" nil "open" "-a" "Photos"))
+                      (switch-to-buffer buffer)))))
+
 (defun dwim-shell-commands-macos-toggle-bluetooth-device-connection ()
   "Toggle Bluetooth device connection."
   (interactive)
@@ -517,13 +565,14 @@ Optional argument ARGS as per `browse-url-default-browser'"
    :utils "convert"))
 
 (defun dwim-shell-commands-pdf-password-protect ()
-  "Speeds up gif(s)."
+  "Add a password to pdf(s)."
   (interactive)
   (dwim-shell-command-on-marked-files
    "Password protect pdf"
-   (format "qpdf --verbose --encrypt '%s' '%s' 256 -- '<<f>>' '<<fne>>_enc.<<e>>'"
+   (format "qpdf --verbose --encrypt '%s' '%s' 256 -- '<<f>>' '<<fne>>_protected.<<e>>'"
            (read-passwd "user-password: ")
            (read-passwd "owner-password: "))
+   :extensions pdf
    :utils "qpdf"
    :extensions "pdf"))
 
@@ -562,6 +611,15 @@ Optional argument ARGS as per `browse-url-default-browser'"
    :silent-success t
    :utils "ffmpeg"))
 
+(defun dwim-shell-commands-video-to-thumbnail ()
+  "Generate a thumbnail for marked video(s)."
+  (interactive)
+  (let ((temp-dir (make-temp-file "thumbnails-" t)))
+    (dwim-shell-command-on-marked-files
+     "Thumbnail with ffmpeg"
+     "ffmpeg -i '<<f>>' -ss 00:00:01.000 -vframes 1 '<<fne>>.jpg'"
+     :utils "ffmpeg")))
+
 (defun dwim-shell-commands-drop-video-audio ()
   "Drop audio from all marked videos."
   (interactive)
@@ -571,7 +629,7 @@ Optional argument ARGS as per `browse-url-default-browser'"
    :utils "ffmpeg"))
 
 (defun dwim-shell-commands-ping-google ()
-  "Ping duckduckgo.com."
+  "Ping google.com."
   (interactive)
   (dwim-shell-command-on-marked-files
    "Ping google.com"
@@ -621,32 +679,23 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
 (defun dwim-shell-commands-sha-256-hash-file-at-clipboard-url ()
   "Download file at clipboard URL and generate SHA-256 hash."
   (interactive)
-  (let ((url (current-kill 0)))
-    (unless (string-match-p "^http[s]?://" url)
-      (user-error "No URL in clipboard"))
-    (dwim-shell-command-on-marked-files
-     "Generate SHA-256 hash from clipboard URL."
-     (format
-      "temp_file=$(mktemp)
-       function cleanup {
-         rm -f $temp_file
-       }
-       trap cleanup EXIT
-       curl --no-progress-meter --location --fail --output $temp_file %s || exit 1
-       shasum -a 256 $temp_file | awk '{print $1}'"
-      (shell-quote-argument url))
-     :utils '("curl" "shasum")
-     :on-completion
-     (lambda (buffer process)
-       (if-let ((success (= (process-exit-status process) 0))
-                (hash (with-current-buffer buffer
-                        (string-trim (buffer-string)))))
-           (progn
-             (kill-buffer buffer)
-             (kill-new hash)
-             (message "Copied %s to clipboard"
-                      (propertize hash 'face 'font-lock-string-face)))
-         (switch-to-buffer buffer))))))
+  (unless (string-match-p "^http[s]?://" (current-kill 0))
+    (user-error "No URL in clipboard"))
+  (dwim-shell-command-on-marked-files
+   "Generate SHA-256 hash from clipboard URL."
+   "curl -s '<<cb>>' | sha256sum - | cut -d ' ' -f1"
+   :utils '("curl" "sha256sum")
+   :on-completion
+   (lambda (buffer process)
+     (if-let ((success (= (process-exit-status process) 0))
+              (hash (with-current-buffer buffer
+                      (string-trim (buffer-string)))))
+         (progn
+           (kill-buffer buffer)
+           (kill-new hash)
+           (message "Copied %s to clipboard"
+                    (propertize hash 'face 'font-lock-string-face)))
+       (switch-to-buffer buffer)))))
 
 (defun dwim-shell-commands-open-externally ()
   "Open file(s) externally."
@@ -654,8 +703,12 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
   (dwim-shell-command-on-marked-files
    "Open externally"
    (if (eq system-type 'darwin)
-       "open '<<f>>'"
-     "xdg-open '<<f>>'")
+       (if (derived-mode-p 'prog-mode)
+           (format "xed --line %d '<<f>>'"
+                   (line-number-at-pos (point)))
+         "open '<<f>>'")
+     "setsid -w xdg-open '<<f>>'")
+   :shell-args '("-x" "-c")
    :silent-success t
    :utils (if (eq system-type 'darwin)
               "open"
@@ -719,8 +772,13 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
                                                 (format "URL(fileURLWithPath: \"%s\")" file))
                                               (dwim-shell-command--files))
                                       ", ")))
-         (services (split-string (string-trim (shell-command-to-string (format "echo '%s' | swift -" source)))
-                                 "\n")))
+         (services (split-string
+                    (string-trim
+                     ;; Remove anything that doesn't start with alpha characters
+                     ;; There may be compilation warnings.
+                     (replace-regexp-in-string "^[^[:alpha:]].*\n" ""
+                                               (shell-command-to-string (format "echo '%s' | swift -" source))))
+                    "\n")))
     (when (seq-empty-p services)
       (error "No sharing services available"))
     services))
@@ -789,6 +847,22 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
      (format "fb-rotate -d 1 -r %s" (if (equal current-rotation "270") "0" "270"))
      :utils "fb-rotate")))
 
+(defun dwim-shell-commands-make-swift-package-library ()
+  "Create a swift package library"
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Create a swift package library"
+   "swift package init --type library"
+   :utils "swift"))
+
+(defun dwim-shell-commands-make-swift-package-executable ()
+  "Create a swift package executable"
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Create a swift package executable"
+   "swift package init --type executable"
+   :utils "swift"))
+
 (defun dwim-shell-commands--macos-apps ()
   "Return alist of macOS apps (\"Emacs\" . \"/Applications/Emacs.app\")."
   (mapcar (lambda (path)
@@ -833,20 +907,20 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
      :utils "open")))
 
 (defun dwim-shell-commands-macos-open-with-firefox ()
-  "Open file(s) with specific external app."
+  "Open file(s) in Firefox."
   (interactive)
   (dwim-shell-command-on-marked-files
-   "Open with Firefox"
+   "Open in Firefox"
    "open -a Firefox '<<*>>'"
    :silent-success t
    :no-progress t
    :utils "open"))
 
 (defun dwim-shell-commands-macos-open-with-safari ()
-  "Open file(s) with specific external app."
+  "Open file(s) in Safari."
   (interactive)
   (dwim-shell-command-on-marked-files
-   "Open with Firefox"
+   "Open in Safari"
    "open -a Safari '<<*>>'"
    :silent-success t
    :no-progress t
@@ -982,6 +1056,22 @@ ffmpeg -n -i '<<f>>' -vf \"scale=$width:-2\" '<<fne>>_x<<Scaling factor:0.5>>.<<
     iconutil -c icns '<<fne>>.iconset'"
    :utils '("sips" "iconutil")
    :extensions "png"))
+
+(defun dwim-shell-commands-image-add-drop-shadow ()
+  "Add a drop shadow."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Add a drop shadow."
+   "convert <<f>> -bordercolor white -border 13 \\( +clone -background black -shadow 80x3+2+2 \\) +swap -background white -layers merge +repage <<fne>>-shadow.<<e>>"
+   :utils "convert"))
+
+(defun dwim-shell-commands-image-trim-borders ()
+  "Trim image(s) border (useful for video screenshots)."
+  (interactive)
+  (dwim-shell-command-on-marked-files
+   "Trim image border"
+   "magick convert -fuzz 3% -define trim:percent-background=0% -trim +repage '<<f>>' '<<fne>>_trimmed.<<e>>'"
+   :utils "magick"))
 
 (defun dwim-shell-commands-git-clone-clipboard-url-to-downloads ()
   "Clone git URL in clipboard to \"~/Downloads/\"."
